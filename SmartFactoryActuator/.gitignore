@@ -1,0 +1,5 @@
+bin/
+obj/
+
+Shared/Config/EnvironmentConfig.cs
+Shared/Protocols/ConnectConfig.cs
