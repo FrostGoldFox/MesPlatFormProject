@@ -108,4 +108,5 @@ public sealed class InfeedConveyorWork
             return _positions.Select(product => product is not null).ToArray();
         }
     }
+
 }

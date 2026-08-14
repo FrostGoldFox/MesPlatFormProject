@@ -35,10 +35,7 @@ public sealed class JsonNetWork : IAsyncDisposable
     private readonly Func<JsonRequest, CancellationToken, ValueTask<object?>> _requestHandler;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 
-    public JsonNetWork(
-        IPAddress address,
-        int port,
-        Func<JsonRequest, CancellationToken, ValueTask<object?>> requestHandler)
+    public JsonNetWork(IPAddress address, int port, Func<JsonRequest, CancellationToken, ValueTask<object?>> requestHandler)
     {
         _listener = new TcpListener(address, port);
         _requestHandler = requestHandler ?? throw new ArgumentNullException(nameof(requestHandler));
@@ -48,7 +45,6 @@ public sealed class JsonNetWork : IAsyncDisposable
     {
         _listener.Start();
         var sessions = new List<Task>();
-
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -58,14 +54,8 @@ public sealed class JsonNetWork : IAsyncDisposable
                 {
                     client = await _listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (SocketException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+                catch (SocketException) when (cancellationToken.IsCancellationRequested) { break; }
 
                 sessions.Add(HandleClientAsync(client, cancellationToken));
                 sessions.RemoveAll(task => task.IsCompleted);
@@ -89,101 +79,57 @@ public sealed class JsonNetWork : IAsyncDisposable
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    (JsonPacketType type, ushort opCode, uint correlationId, JsonElement payload)? frame =
-                        await ReceiveFrameAsync(stream, cancellationToken).ConfigureAwait(false);
+                    var frame = await ReceiveFrameAsync(stream, cancellationToken).ConfigureAwait(false);
+                    if (frame is null) return;
 
-                    // 헤더를 읽기 전에 0바이트가 반환되면 클라이언트가 정상 종료한 것입니다.
-                    if (frame is null)
-                    {
-                        return;
-                    }
-
-                    if (frame.Value.type != JsonPacketType.Request || frame.Value.correlationId == 0)
-                    {
+                    if (frame.Type != JsonPacketType.Request || frame.CorrelationId == 0)
                         throw new InvalidDataException("Request 패킷과 0이 아닌 CorrelationId가 필요합니다.");
-                    }
 
-                    var request = new JsonRequest(frame.Value.opCode, frame.Value.correlationId, frame.Value.payload, remoteEndPoint);
+                    var request = new JsonRequest(frame.OpCode, frame.CorrelationId, frame.Payload, remoteEndPoint);
                     try
                     {
                         object? response = await _requestHandler(request, cancellationToken).ConfigureAwait(false);
-                        await SendFrameAsync(stream, JsonPacketType.Response, request.OpCode, request.CorrelationId, response, cancellationToken)
-                            .ConfigureAwait(false);
+                        await SendFrameAsync(stream, JsonPacketType.Response, request.OpCode, request.CorrelationId, response, cancellationToken).ConfigureAwait(false);
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        // 외부에는 안전한 오류 정보만 전달합니다.
-                        var error = new JsonError("HANDLER_ERROR", exception.Message);
-                        await SendFrameAsync(stream, JsonPacketType.Error, request.OpCode, request.CorrelationId, error, cancellationToken)
-                            .ConfigureAwait(false);
+                        await SendFrameAsync(stream, JsonPacketType.Error, request.OpCode, request.CorrelationId,
+                            new JsonError("HANDLER_ERROR", exception.Message), cancellationToken).ConfigureAwait(false);
                     }
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-            }
-            catch (IOException)
-            {
-                // 원격 연결 종료: 다른 클라이언트와 PLC 제어 루프는 계속 동작합니다.
-            }
-            catch (SocketException)
-            {
-            }
-            catch (InvalidDataException)
-            {
-                // Magic/Version/Length/패킷 타입이 잘못된 연결은 프레임 동기가 깨졌으므로 종료합니다.
-            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (IOException) { }
+            catch (SocketException) { }
+            catch (InvalidDataException) { }
         }
     }
 
-    private async Task<(JsonPacketType type, ushort opCode, uint correlationId, JsonElement payload)?> ReceiveFrameAsync(
-        NetworkStream stream,
-        CancellationToken cancellationToken)
+    private async Task<JsonFrame?> ReceiveFrameAsync(NetworkStream stream, CancellationToken cancellationToken)
     {
         byte[] header = new byte[HeaderLength];
-        if (!await ReadExactAsync(stream, header, allowEmpty: true, cancellationToken).ConfigureAwait(false))
-        {
-            return null;
-        }
+        if (!await ReadExactAsync(stream, header, true, cancellationToken).ConfigureAwait(false)) return null;
 
         if (BinaryPrimitives.ReadUInt16LittleEndian(header) != Magic)
-        {
             throw new InvalidDataException("지원하지 않는 Magic 값입니다.");
-        }
-
         if (header[2] != Version)
-        {
             throw new InvalidDataException($"지원하지 않는 프로토콜 버전입니다: {header[2]}");
-        }
 
-        var type = (JsonPacketType)header[3];
-        ushort opCode = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(4));
-        uint correlationId = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(6));
         int bodyLength = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(10));
         if (bodyLength < 0 || bodyLength > MaxBodyLength)
-        {
             throw new InvalidDataException($"본문 길이가 허용 범위를 벗어났습니다: {bodyLength}");
-        }
 
         byte[] body = new byte[bodyLength];
-        await ReadExactAsync(stream, body, allowEmpty: false, cancellationToken).ConfigureAwait(false);
+        await ReadExactAsync(stream, body, false, cancellationToken).ConfigureAwait(false);
         using JsonDocument document = JsonDocument.Parse(body);
-        return (type, opCode, correlationId, document.RootElement.Clone());
+        return new JsonFrame((JsonPacketType)header[3], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(4)),
+            BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(6)), document.RootElement.Clone());
     }
 
-    private async Task SendFrameAsync(
-        NetworkStream stream,
-        JsonPacketType type,
-        ushort opCode,
-        uint correlationId,
-        object? payload,
-        CancellationToken cancellationToken)
+    private async Task SendFrameAsync(NetworkStream stream, JsonPacketType type, ushort opCode, uint correlationId, object? payload, CancellationToken cancellationToken)
     {
         byte[] body = JsonSerializer.SerializeToUtf8Bytes(payload, _jsonOptions);
-        if (body.Length > MaxBodyLength)
-        {
-            throw new InvalidDataException($"응답 본문이 허용 범위를 벗어났습니다: {body.Length}");
-        }
+        if (body.Length > MaxBodyLength) throw new InvalidDataException($"응답 본문이 허용 범위를 벗어났습니다: {body.Length}");
 
         byte[] frame = new byte[HeaderLength + body.Length];
         BinaryPrimitives.WriteUInt16LittleEndian(frame, Magic);
@@ -196,11 +142,7 @@ public sealed class JsonNetWork : IAsyncDisposable
         await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<bool> ReadExactAsync(
-        NetworkStream stream,
-        Memory<byte> buffer,
-        bool allowEmpty,
-        CancellationToken cancellationToken)
+    private static async Task<bool> ReadExactAsync(NetworkStream stream, Memory<byte> buffer, bool allowEmpty, CancellationToken cancellationToken)
     {
         int received = 0;
         while (received < buffer.Length)
@@ -208,17 +150,11 @@ public sealed class JsonNetWork : IAsyncDisposable
             int read = await stream.ReadAsync(buffer[received..], cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {
-                if (received == 0 && allowEmpty)
-                {
-                    return false;
-                }
-
+                if (received == 0 && allowEmpty) return false;
                 throw new IOException("프레임을 모두 받기 전에 원격 연결이 종료되었습니다.");
             }
-
             received += read;
         }
-
         return true;
     }
 
@@ -227,4 +163,6 @@ public sealed class JsonNetWork : IAsyncDisposable
         _listener.Stop();
         return ValueTask.CompletedTask;
     }
+
+    private sealed record JsonFrame(JsonPacketType Type, ushort OpCode, uint CorrelationId, JsonElement Payload);
 }

@@ -1,94 +1,43 @@
-using System;
+namespace VirtualPLC;
 
-public enum State
+/// <summary>PLC가 Modbus로 폴링해 들고 있는 Infeed Conveyor의 최근 상태입니다.</summary>
+public sealed class InfeedConveyorDataModel
 {
-	Unknown = 0,
-	Working = 1,
-	Stopped = 2,
-	Error = 3
-}
-public class ConveyorPosition
-{
-	public int Position { get; init; }
-	public bool IsObject { get; set; }
-}
-public class InfeedConveyorDataModel
-{
-	public string DeviceId { get; init; }
-	public bool IsWorking { get; set; }
-	public ConveyorPosition[] Positions { get; set; }
-	public InfeedConveyorDataModel(string DeviceId)
-	{
-		this.DeviceId = DeviceId;
-		const int PositionCount = 12;
-		// 여러 위치를 담는 Positions 배열을 초기화한다.
-		Positions = new ConveyorPosition[PositionCount];
-		for (int i = 1; i <= PositionCount; i++)
-		{
-			Positions[i-1] = new ConveyorPosition
-			{
-				Position = i,
-				IsObject = false
-			}
-		}
-	}
+    public bool IsRunning { get; set; }
+
+    /// <summary>index 0 = Position 1 ... index 11 = Position 12.</summary>
+    public bool[] PositionOccupied { get; } = new bool[12];
 }
 
-public class InspectionConveyorDataModel
+/// <summary>PLC가 Modbus로 폴링해 들고 있는 Inspection Conveyor의 최근 상태입니다.</summary>
+public sealed class InspectionConveyorDataModel
 {
-	public string DeviceId { get; init; }
-	public bool IsWorking { get; set; }
-	public ConveyorPosition[] Positions { get; set; }
-	public InspectionConveyorDataModel(string DeviceId)
-	{
-		this.DeviceId = DeviceId;
-		const int PositionCount = 12;
-		Positions = new ConveyorPosition[PositionCount];
-		for (int i = 1; i <= PositionCount; i++)
-		{
-			Positions[i-1] = new ConveyorPosition
-			{
-				Position = i,
-				IsObject = false
-			}
-		}
-	}
+    public bool IsRunning { get; set; }
+
+    /// <summary>index 0 = Position 1 ... index 11 = Position 12.</summary>
+    public bool[] PositionOccupied { get; } = new bool[12];
 }
 
-public class PneumaticPressureDataModel
+/// <summary>PLC가 Modbus로 폴링해 들고 있는 공압 센서의 최근 상태입니다. State는 장비 쪽 State enum의 원시값입니다.</summary>
+public sealed class PneumaticPressureDataModel
 {
-	public string DeviceId { get; init; }
-	public PneumaticPressureDataModel(string DeviceId)
-	{
-		this.DeviceId = DeviceId;
-	}
-	public ushort TargetPressure { get; set; } = 500;
-	public ushort CurrentPressure { get; set; }
-	public State SensorState { get; set; } = State.Unknown;
+    public ushort State { get; set; }
+    public ushort TargetPressure { get; set; }
+    public ushort CurrentPressure { get; set; }
 }
 
-public class VibrationDataModel
+/// <summary>PLC가 Modbus로 폴링해 들고 있는 진동 센서의 최근 상태입니다.</summary>
+public sealed class VibrationDataModel
 {
-	public string DeviceId { get; init; }
-	public VibrationDataModel(string DeviceId)
-	{
-		this.DeviceId = DeviceId;
-	}
-	public bool IsWorking { get; set; }
-	public ushort VibrationState { get; set; }
-	public State SensorState { get; set; } = State.Unknown;
+    public bool IsRunning { get; set; }
+    public ushort State { get; set; }
+    public ushort TargetVibration { get; set; }
+    public ushort CurrentVibration { get; set; }
 }
 
-public class RejectCylinderDataModel
+/// <summary>PLC가 Modbus로 폴링해 들고 있는 Reject Cylinder의 최근 상태입니다.</summary>
+public sealed class RejectCylinderDataModel
 {
-	public string DeviceId { get; init; }
-	public RejectCylinderDataModel(string DeviceId)
-	{
-		this.DeviceId = DeviceId;
-	}
-	
-	public bool IsWorking { get; set; }
-	public State SensorState { get; set; } = State.Unknown;
-	public ushort RejectCylinderState { get; set; }
+    public bool IsExtended { get; set; }
+    public bool IsRetracted { get; set; }
 }
-
