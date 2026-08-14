@@ -12,6 +12,8 @@ public sealed class PneumaticPressureNetWork : IAsyncDisposable
     private const ushort StateRegister = 0;
     private const ushort TargetPressureRegister = 1;
     private const ushort CurrentPressureRegister = 2;
+    private const ushort StartCoil = 0;
+    private const ushort StopCoil = 1;
 
     private readonly PneumaticPressureWork _work;
     private readonly TcpListener _listener;
@@ -53,11 +55,29 @@ public sealed class PneumaticPressureNetWork : IAsyncDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            ReadPlcCommands();
             ReadTargetPressureCommand();
             _work.Tick();
             PublishState();
 
             await Task.Delay(100, cancellationToken);
+        }
+    }
+
+    private void ReadPlcCommands()
+    {
+        bool[] commands = _dataStore.CoilDiscretes.ReadPoints(StartCoil, 2);
+
+        if (commands[0])
+        {
+            _work.Start();
+            _dataStore.CoilDiscretes.WritePoints(StartCoil, [false]);
+        }
+
+        if (commands[1])
+        {
+            _work.Stop();
+            _dataStore.CoilDiscretes.WritePoints(StopCoil, [false]);
         }
     }
 

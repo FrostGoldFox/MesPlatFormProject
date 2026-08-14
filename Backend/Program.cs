@@ -1,13 +1,11 @@
 using System.Net;
 using Backend;
+using SmartFactoryActuator.Shared.Config;
 using SmartFactoryActuator.TransferConveyor.InspetionConveyor;
 
-const string PlcHost = "127.0.0.1";
-const int PlcApiPort = 6000;
-
-Console.WriteLine($"[Backend] PLC 접속 시도: {PlcHost}:{PlcApiPort}");
+Console.WriteLine($"[Backend] PLC 접속 시도: {EnvironmentConfig.Host}:{EnvironmentConfig.PlcApiPort}");
 await using var network = new NetWork();
-await network.ConnectAsync(IPAddress.Parse(PlcHost), PlcApiPort);
+await network.ConnectAsync(IPAddress.Parse(EnvironmentConfig.Host), EnvironmentConfig.PlcApiPort);
 Console.WriteLine("[Backend] 접속 완료");
 Console.WriteLine();
 

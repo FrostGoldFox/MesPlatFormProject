@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using NModbus;
 using NModbus.Data;
+using SmartFactoryActuator.TransferConveyor.InfeedConveyor;
 
 namespace SmartFactoryActuator.TransferConveyor.InspetionConveyor;
 
@@ -11,6 +12,7 @@ public sealed class InspetionConveyorNetWork : IAsyncDisposable
     public const ushort RunCommandCoil = 0;
     public const ushort StopCommandCoil = 1;
     public const ushort ResetCommandCoil = 2;
+    public const ushort AcceptCommandCoil = 3;
     public const ushort RunningInput = 0;
     public const ushort PositionStartInput = 1;
 
@@ -47,9 +49,18 @@ public sealed class InspetionConveyorNetWork : IAsyncDisposable
 
     private async Task DeviceLoopAsync(CancellationToken cancellationToken)
     {
+        var nextMoveAt = DateTimeOffset.UtcNow;
+
         while (!cancellationToken.IsCancellationRequested)
         {
             ProcessPlcCommands();
+
+            if (_work.IsRunning && DateTimeOffset.UtcNow >= nextMoveAt)
+            {
+                _work.TryMoveOneStep();
+                nextMoveAt = DateTimeOffset.UtcNow.AddMilliseconds(500);
+            }
+
             PublishDeviceState();
 
             await Task.Delay(100, cancellationToken);
@@ -58,7 +69,7 @@ public sealed class InspetionConveyorNetWork : IAsyncDisposable
 
     private void ProcessPlcCommands()
     {
-        bool[] commands = _dataStore.CoilDiscretes.ReadPoints(RunCommandCoil, 3);
+        bool[] commands = _dataStore.CoilDiscretes.ReadPoints(RunCommandCoil, 4);
 
         if (commands[0])
         {
@@ -74,7 +85,15 @@ public sealed class InspetionConveyorNetWork : IAsyncDisposable
 
         if (commands[2])
         {
+            _work.TryTakeOutput(out _);
             _dataStore.CoilDiscretes.WritePoints(ResetCommandCoil, [false]);
+        }
+
+        if (commands[3])
+        {
+            // 실제 Serial은 Modbus로 전달할 수 없어 자리 표시용 값만 싣는다 — 위치 점유 시뮬레이션이 목적이다.
+            _work.TryAcceptInput(new ConveyorProduct("INSPECTION-MANUAL"));
+            _dataStore.CoilDiscretes.WritePoints(AcceptCommandCoil, [false]);
         }
     }
 

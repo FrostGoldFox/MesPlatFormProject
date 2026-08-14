@@ -9,6 +9,8 @@ public enum ProcessStep
     WaitingForFasteningReceipt,
     Vibrating,
     Fastening,
+    WaitingForInspectionReceipt,
+    MovingToInspection,
     WaitingForVision,
     Completed,
     Faulted
@@ -17,6 +19,7 @@ public enum ProcessStep
 public enum ProcessAlarmType
 {
     InfeedTimeout,
+    InspectionTransferTimeout,
     ModbusCommunication
 }
 
@@ -50,6 +53,7 @@ public sealed class VirtualPlcProcessController
     public static readonly TimeSpan InfeedTransferTimeout = TimeSpan.FromSeconds(10);
     public static readonly TimeSpan VibrationDuration = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan FasteningDuration = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan InspectionTransferTimeout = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan VisionTimeout = TimeSpan.FromSeconds(15);
 
     private readonly Queue<ProcessCommand> _commands = new();
@@ -104,11 +108,14 @@ public sealed class VirtualPlcProcessController
                 break;
 
             case ProcessStep.Fastening when HasElapsed(now, FasteningDuration):
-                Enqueue(ProcessCommandType.StopFastening);
+                // 체결설비는 아직 끄지 않는다 — Inspection Position 1 도착이 확인된 뒤에 끈다(ConfirmInspectionReceipt).
                 Enqueue(ProcessCommandType.StartInspectionConveyor);
-                Enqueue(ProcessCommandType.TriggerVision);
-                Step = ProcessStep.WaitingForVision;
+                Step = ProcessStep.WaitingForInspectionReceipt;
                 _stepStartedAt = now;
+                break;
+
+            case ProcessStep.MovingToInspection when HasElapsed(now, InspectionTransferTimeout):
+                RaiseAlarm(ProcessAlarmType.InspectionTransferTimeout, "제품이 제한 시간 안에 Inspection Position 12에 도착하지 않았습니다.");
                 break;
 
             case ProcessStep.WaitingForVision when HasElapsed(now, VisionTimeout):
@@ -126,6 +133,34 @@ public sealed class VirtualPlcProcessController
 
         Enqueue(ProcessCommandType.StartVibration);
         Step = ProcessStep.Vibrating;
+        _stepStartedAt = now;
+        return true;
+    }
+
+    /// <summary>Inspection Conveyor Position 1의 재실이 확인된 시점. 여기서 비로소 체결설비를 끈다.</summary>
+    public bool ConfirmInspectionReceipt(DateTimeOffset now)
+    {
+        if (Step != ProcessStep.WaitingForInspectionReceipt)
+        {
+            return false;
+        }
+
+        Enqueue(ProcessCommandType.StopFastening);
+        Step = ProcessStep.MovingToInspection;
+        _stepStartedAt = now;
+        return true;
+    }
+
+    /// <summary>Inspection Conveyor Position 12까지 이동이 확인된 시점. 여기서 비전검사를 트리거한다.</summary>
+    public bool ConfirmInspectionComplete(DateTimeOffset now)
+    {
+        if (Step != ProcessStep.MovingToInspection)
+        {
+            return false;
+        }
+
+        Enqueue(ProcessCommandType.TriggerVision);
+        Step = ProcessStep.WaitingForVision;
         _stepStartedAt = now;
         return true;
     }

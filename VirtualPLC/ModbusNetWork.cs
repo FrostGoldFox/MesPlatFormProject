@@ -139,6 +139,14 @@ public sealed class ModbusNetWork : IAsyncDisposable
     public void StopInspectionConveyor() =>
         InspectionMaster.WriteSingleCoil(InspetionConveyorNetWork.UnitId, InspetionConveyorNetWork.StopCommandCoil, true);
 
+    // Command 5: Inspection Conveyor의 Position 12 Clear 요청을 장비 Coil로 전달한다.
+    public void ClearInspectionPosition12() =>
+        InspectionMaster.WriteSingleCoil(InspetionConveyorNetWork.UnitId, InspetionConveyorNetWork.ResetCommandCoil, true);
+
+    // Command 6: 체결설비에서 나온 제품이 Inspection Position 1에 도착했다는 신호(사람이 옮기는 구간).
+    public void AcceptInspectionInput() =>
+        InspectionMaster.WriteSingleCoil(InspetionConveyorNetWork.UnitId, InspetionConveyorNetWork.AcceptCommandCoil, true);
+
     public void ExtendRejectCylinder() => RejectMaster.WriteSingleCoil(RejectCylinderNetWork.Id, 0, true);
     public void RetractRejectCylinder() => RejectMaster.WriteSingleCoil(RejectCylinderNetWork.Id, 1, true);
 

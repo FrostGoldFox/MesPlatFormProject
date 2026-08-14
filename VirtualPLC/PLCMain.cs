@@ -1,15 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using SmartFactoryActuator.Shared.Config;
 using VirtualPLC;
-
-// TODO(D5, 접속 설정 외부화): 아래 주소·포트는 임시 기본값이다. EnvironmentConfig 구현 후 설정 파일로 옮길 것.
-const string DeviceHost = "127.0.0.1";
-const int InfeedPort = 1502;
-const int PneumaticPort = 1503;
-const int VibrationPort = 1504;
-const int RejectPort = 1505;
-const int InspectionPort = 1506;
-const int PlcApiPort = 6000;
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
@@ -18,8 +10,14 @@ Console.CancelKeyPress += (_, e) =>
     cancellation.Cancel();
 };
 
-await using var modbus = new ModbusNetWork(IPAddress.Parse(DeviceHost));
-await modbus.ConnectAsync(InfeedPort, PneumaticPort, VibrationPort, RejectPort, InspectionPort, cancellation.Token);
+await using var modbus = new ModbusNetWork(IPAddress.Parse(EnvironmentConfig.Host));
+await modbus.ConnectAsync(
+    EnvironmentConfig.InfeedConveyorPort,
+    EnvironmentConfig.PneumaticPressurePort,
+    EnvironmentConfig.VibrationPort,
+    EnvironmentConfig.RejectCylinderPort,
+    EnvironmentConfig.InspectionConveyorPort,
+    cancellation.Token);
 Console.WriteLine("장비 5종 Modbus 연결 완료");
 
 var runtime = new PlcModbusRuntime(modbus);
@@ -63,16 +61,42 @@ async ValueTask<object?> HandleRequestAsync(JsonRequest request, CancellationTok
     }
 }
 
-await using var jsonServer = new JsonNetWork(IPAddress.Any, PlcApiPort, HandleRequestAsync);
+await using var jsonServer = new JsonNetWork(IPAddress.Any, EnvironmentConfig.PlcApiPort, HandleRequestAsync);
 Task apiServerTask = jsonServer.RunAsync(cancellation.Token);
-Console.WriteLine($"PLC API 서버 시작 (포트 {PlcApiPort})");
+Console.WriteLine($"PLC API 서버 시작 (포트 {EnvironmentConfig.PlcApiPort})");
+
+// VirtualPLCTestWPF가 "물건 올려두기" 등 수동 신호를 보내는 통신. 실물 센서가 없는 개발 단계 전용이다.
+var manualInfeedSignal = new InfeedConveyorDataModel();
+var manualPneumaticPressureSignal = new PneumaticPressureDataModel();
+var manualInspectionSignal = new InspectionConveyorDataModel();
+await using var testNetwork = new TestNetWork(manualInfeedSignal, manualPneumaticPressureSignal, manualInspectionSignal, IPAddress.Any, EnvironmentConfig.ReservedPort1);
+Task testNetworkTask = testNetwork.RunAsync(cancellation.Token);
+Console.WriteLine($"테스트 신호 수신 시작 (포트 {EnvironmentConfig.ReservedPort1})");
 
 using var pollTimer = new PeriodicTimer(TimeSpan.FromMilliseconds(150));
 try
 {
     while (await pollTimer.WaitForNextTickAsync(cancellation.Token))
     {
-        runtime.PollOnce(DateTimeOffset.UtcNow);
+        // Command 5는 수신 1건당 한 번만 Inspection 장비의 Clear Coil로 전달한다.
+        if (testNetwork.TryConsumeCommand5())
+        {
+            modbus.ClearInspectionPosition12();
+        }
+
+        // Command 6: 체결설비→Inspection Position1 인계(사람이 옮기는 구간)를 한 번만 전달한다.
+        if (testNetwork.TryConsumeCommand6())
+        {
+            modbus.AcceptInspectionInput();
+        }
+
+        // WPF 테스트 신호로 바뀐 목표압력을 실제 장비에 매 주기 반영한다.
+        modbus.SetTargetPressure(manualPneumaticPressureSignal.TargetPressure);
+
+        runtime.PollOnce(
+            DateTimeOffset.UtcNow,
+            manualPosition1Override: manualInfeedSignal.PositionOccupied[0],
+            manualPosition12Override: manualInfeedSignal.PositionOccupied[11]);
     }
 }
 catch (OperationCanceledException)
@@ -80,4 +104,4 @@ catch (OperationCanceledException)
     // Ctrl+C 종료
 }
 
-await apiServerTask;
+await Task.WhenAll(apiServerTask, testNetworkTask);

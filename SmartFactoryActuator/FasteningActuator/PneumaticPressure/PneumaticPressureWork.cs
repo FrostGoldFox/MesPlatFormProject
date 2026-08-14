@@ -10,7 +10,9 @@ public enum PneumaticPressureState : ushort
 
 public sealed class PneumaticPressureWork
 {
-    private readonly Random _random = new();
+    private static readonly TimeSpan StepInterval = TimeSpan.FromSeconds(1);
+
+    private DateTimeOffset _lastStepAt = DateTimeOffset.MinValue;
 
     public ushort TargetPressure { get; set; } = 500;
     public ushort CurrentPressure { get; private set; } = 500;
@@ -29,6 +31,10 @@ public sealed class PneumaticPressureWork
         SensorState = PneumaticPressureState.Stopped;
     }
 
+    /// <summary>
+    /// 목표값으로 즉시 점프하지 않고, 1초마다 현재값을 목표값 방향으로 1씩만 움직인다 —
+    /// 실린더가 압력을 서서히 맞춰가는 것을 흉내낸다.
+    /// </summary>
     public void Tick()
     {
         if (!IsRunning)
@@ -36,8 +42,23 @@ public sealed class PneumaticPressureWork
             return;
         }
 
-        int variation = _random.Next(-10, 11);
-        CurrentPressure = (ushort)Math.Clamp(TargetPressure + variation, 0, ushort.MaxValue);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        if (now - _lastStepAt < StepInterval)
+        {
+            return;
+        }
+
+        _lastStepAt = now;
+
+        if (CurrentPressure < TargetPressure)
+        {
+            CurrentPressure++;
+        }
+        else if (CurrentPressure > TargetPressure)
+        {
+            CurrentPressure--;
+        }
+
         SensorState = PneumaticPressureState.Working;
     }
 }
