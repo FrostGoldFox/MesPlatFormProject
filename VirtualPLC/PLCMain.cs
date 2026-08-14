@@ -43,7 +43,7 @@ async ValueTask<object?> HandleRequestAsync(JsonRequest request, CancellationTok
         {
             SubmitVisionResultRequest body = request.Payload.Deserialize<SubmitVisionResultRequest>(requestJsonOptions)
                 ?? throw new InvalidDataException("SubmitVisionResult payload가 비어 있습니다.");
-            bool success = runtime.TrySubmitVisionResult(body.SerialNumber, body.Result);
+            bool success = runtime.TrySubmitVisionResult(body.SerialNumber, body.Result, DateTimeOffset.UtcNow);
             return new SubmitVisionResultResponse(success);
         }
 

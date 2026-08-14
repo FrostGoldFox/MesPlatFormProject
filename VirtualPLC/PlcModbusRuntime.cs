@@ -9,6 +9,10 @@ namespace VirtualPLC;
 /// </summary>
 public sealed class PlcModbusRuntime
 {
+    // 공장계획.md AL-P1-03(공압 저하)의 자리표시 값. 정본 설비 매뉴얼 수치로 나중에 교체할 것.
+    private const ushort PressureLowerBound = 350;
+    private const ushort PressureUpperBound = 650;
+
     private readonly ModbusNetWork _modbus;
 
     public PlcModbusRuntime(ModbusNetWork modbus, VirtualPlcProcessController? process = null)
@@ -26,8 +30,8 @@ public sealed class PlcModbusRuntime
     public bool TryRegisterProduct(string serialNumber, DateTimeOffset now) =>
         Process.TryRegisterInfeedProduct(serialNumber, now);
 
-    public bool TrySubmitVisionResult(string serialNumber, SmartFactoryActuator.TransferConveyor.InspetionConveyor.InspectionResult result) =>
-        Process.TrySubmitVisionResult(serialNumber, result);
+    public bool TrySubmitVisionResult(string serialNumber, SmartFactoryActuator.TransferConveyor.InspetionConveyor.InspectionResult result, DateTimeOffset now) =>
+        Process.TrySubmitVisionResult(serialNumber, result, now);
 
     /// <summary>
     /// Modbus 읽기·쓰기는 모두 여기서 예외를 잡는다. 실패하면 다음 단계로 진행하지 않고
@@ -41,6 +45,22 @@ public sealed class PlcModbusRuntime
     {
         try
         {
+            // 공압 실측값 범위 검사 — 이미 Faulted면 다른 알람 사유를 덮어쓰지 않도록 건너뛴다.
+            if (Process.Step != ProcessStep.Faulted)
+            {
+                PneumaticPressureDataModel pressure = _modbus.ReadPneumaticPressure();
+                if (pressure.CurrentPressure < PressureLowerBound || pressure.CurrentPressure > PressureUpperBound)
+                {
+                    Process.RaisePressureOutOfRangeAlarm(pressure.CurrentPressure, PressureLowerBound, PressureUpperBound);
+                    if (Process.ActiveAlarm is not null)
+                    {
+                        AlarmRaised?.Invoke(Process.ActiveAlarm);
+                    }
+
+                    return;
+                }
+            }
+
             InfeedConveyorDataModel infeed = _modbus.ReadInfeed();
             // PositionOccupied[0] = Position 1(재실), [11] = Position 12(체결설비 인계 지점)
             bool position1 = infeed.PositionOccupied[0] || manualPosition1Override;
@@ -130,6 +150,9 @@ public sealed class PlcModbusRuntime
                 break;
             case ProcessCommandType.ExtendRejectCylinder:
                 _modbus.ExtendRejectCylinder();
+                break;
+            case ProcessCommandType.RetractRejectCylinder:
+                _modbus.RetractRejectCylinder();
                 break;
         }
     }

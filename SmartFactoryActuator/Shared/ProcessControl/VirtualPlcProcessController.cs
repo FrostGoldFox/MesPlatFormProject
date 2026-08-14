@@ -20,6 +20,7 @@ public enum ProcessAlarmType
 {
     InfeedTimeout,
     InspectionTransferTimeout,
+    PressureOutOfRange,
     ModbusCommunication
 }
 
@@ -36,7 +37,8 @@ public enum ProcessCommandType
     StopFastening,
     StartInspectionConveyor,
     TriggerVision,
-    ExtendRejectCylinder
+    ExtendRejectCylinder,
+    RetractRejectCylinder
 }
 
 public sealed record ProcessCommand(ProcessCommandType Type, string SerialNumber);
@@ -55,11 +57,13 @@ public sealed class VirtualPlcProcessController
     public static readonly TimeSpan FasteningDuration = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan InspectionTransferTimeout = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan VisionTimeout = TimeSpan.FromSeconds(15);
+    public static readonly TimeSpan RejectDwellDuration = TimeSpan.FromSeconds(2);
 
     private readonly Queue<ProcessCommand> _commands = new();
     private DateTimeOffset _nextInfeedPollAt;
     private DateTimeOffset _nextTransferPollAt;
     private DateTimeOffset? _stepStartedAt;
+    private DateTimeOffset? _rejectExtendedAt;
     private string? _serialNumber;
     private InspectionResult? _completionResult;
 
@@ -83,6 +87,13 @@ public sealed class VirtualPlcProcessController
 
     public void Tick(DateTimeOffset now, bool infeedPosition1HasProduct, bool infeedPosition12HasProduct)
     {
+        // Reject 실린더는 어느 Step에 있든(이미 다음 제품을 받고 있어도) 독립적으로 원위치한다.
+        if (_rejectExtendedAt is not null && now - _rejectExtendedAt.Value >= RejectDwellDuration)
+        {
+            _commands.Enqueue(new ProcessCommand(ProcessCommandType.RetractRejectCylinder, string.Empty));
+            _rejectExtendedAt = null;
+        }
+
         switch (Step)
         {
             case ProcessStep.WaitingForInfeed:
@@ -119,7 +130,7 @@ public sealed class VirtualPlcProcessController
                 break;
 
             case ProcessStep.WaitingForVision when HasElapsed(now, VisionTimeout):
-                Complete(InspectionResult.Unjudged);
+                Complete(InspectionResult.Unjudged, now);
                 break;
         }
     }
@@ -165,20 +176,27 @@ public sealed class VirtualPlcProcessController
         return true;
     }
 
-    public bool TrySubmitVisionResult(string serialNumber, InspectionResult result)
+    public bool TrySubmitVisionResult(string serialNumber, InspectionResult result, DateTimeOffset now)
     {
         if (Step != ProcessStep.WaitingForVision || !string.Equals(_serialNumber, serialNumber, StringComparison.Ordinal))
         {
             return false;
         }
 
-        Complete(result);
+        Complete(result, now);
         return true;
     }
 
     public void RaiseCommunicationAlarm(Exception exception)
     {
         RaiseAlarm(ProcessAlarmType.ModbusCommunication, $"Modbus 통신 오류: {exception.Message}");
+    }
+
+    /// <summary>공압 실측값이 정상 범위를 벗어났을 때 호출한다 — 계획서 AL-P1-03(공압 저하) 대응.</summary>
+    public void RaisePressureOutOfRangeAlarm(ushort currentPressure, ushort lowerBound, ushort upperBound)
+    {
+        RaiseAlarm(ProcessAlarmType.PressureOutOfRange,
+            $"공압이 허용 범위를 벗어났습니다: 현재값={currentPressure} (허용 {lowerBound}~{upperBound})");
     }
 
     /// <summary>원인 확인 후 호출합니다. 고장 제품은 자동 재시작하지 않고 폐기/재투입 판단을 외부에서 합니다.</summary>
@@ -192,6 +210,7 @@ public sealed class VirtualPlcProcessController
         ActiveAlarm = null;
         _serialNumber = null;
         _stepStartedAt = null;
+        _rejectExtendedAt = null;
         _completionResult = null;
         _commands.Clear();
         Step = ProcessStep.WaitingForInfeed;
@@ -269,11 +288,12 @@ public sealed class VirtualPlcProcessController
         }
     }
 
-    private void Complete(InspectionResult result)
+    private void Complete(InspectionResult result, DateTimeOffset now)
     {
         if (result == InspectionResult.Failed)
         {
             Enqueue(ProcessCommandType.ExtendRejectCylinder);
+            _rejectExtendedAt = now;
         }
 
         _completionResult = result;
