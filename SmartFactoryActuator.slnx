@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="SmartFactoryActuator/SmartFactoryActuator.csproj" />
   <Project Path="VirtualPLC/VirtualPLC.csproj" />
+  <Project Path="Backend/Backend.csproj" />
 </Solution>
